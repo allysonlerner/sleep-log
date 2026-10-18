@@ -55,6 +55,43 @@
     background: transparent; color: var(--fg); }
   dialog button.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
   .hint { font-size: 13px; color: var(--muted); margin-top: 10px; line-height: 1.4; }
+  .err { font-size: 13px; color: #f28b82; margin-top: 6px; min-height: 1em; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #E24B4A;
+    animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+  #naps { display: flex; align-items: center; justify-content: space-between; width: 100%; text-align: left;
+    background: var(--card); border: 1px solid #CFE2F3; border-radius: 12px; padding: 8px 14px; color: var(--fg); font: inherit; }
+  #naps .lab { font-size: 12px; color: var(--muted); }
+  #napsVal { font-size: 17px; font-weight: 600; color: #CFE2F3; display: flex; align-items: center; gap: 8px; }
+  #napsVal small { font-size: 12px; font-weight: 400; color: var(--muted); }
+  #naps .chev { font-size: 22px; color: var(--muted); }
+  .timerow { display: flex; gap: 8px; align-items: stretch; }
+  .timerow input { font-size: 32px; font-weight: 600; letter-spacing: 1px; }
+  #ampm { display: flex; flex-direction: column; gap: 6px; width: 72px; }
+  #ampm button { flex: 1; padding: 0; font-size: 16px; }
+  #ampm button.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  #today { position: fixed; inset: 0; z-index: 10; background: var(--bg); display: flex; flex-direction: column; gap: 8px;
+    padding: env(safe-area-inset-top) 12px env(safe-area-inset-bottom); }
+  #today[hidden] { display: none; }
+  #todayBar { margin-top: 10px; display: flex; align-items: center; justify-content: space-between; }
+  #todayBack { border: 0; background: transparent; color: var(--muted); font-size: 16px; padding: 8px 4px; }
+  #todayHead { background: var(--card); border-radius: 12px; padding: 10px 14px; }
+  #todayHead h2 { margin: 0; font-size: 20px; }
+  #todayNaps { font-size: 14px; color: #CFE2F3; margin-top: 2px; display: flex; align-items: center; gap: 8px; }
+  #timeline { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding-bottom: 12px;
+    -webkit-overflow-scrolling: touch; }
+  #timeline .empty { color: var(--muted); text-align: center; margin-top: 40px; }
+  .blk { flex: none; border-radius: 6px; color: #222; display: flex; justify-content: space-between; align-items: center;
+    padding: 0 10px; font-size: 13px; }
+  .blk.tall { align-items: flex-start; padding: 7px 10px; font-size: 13px; }
+  .blk .t1 { display: block; }
+  .blk .name { font-weight: 600; font-size: 15px; }
+  .blk .dur { font-weight: 600; white-space: nowrap; }
+  .blk.now { margin-top: 6px; outline: 2px solid var(--fg); outline-offset: 2px; border-radius: 8px 8px 0 0;
+    border-bottom: 3px dashed var(--bg); align-items: flex-start; padding: 8px 10px; }
+  .blk .right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .pill { background: var(--bg); color: var(--fg); border-radius: 999px; padding: 2px 9px; font-size: 12px; font-weight: 500;
+    display: inline-flex; align-items: center; gap: 6px; }
 </style>
 </head>
 <body>
@@ -62,6 +99,11 @@
     <div id="nowMain">Loading…</div>
     <div id="nowSub"></div>
   </section>
+
+  <button id="naps" type="button">
+    <span><span class="lab">Naps today</span><br><span id="napsVal">—</span></span>
+    <span class="chev" aria-hidden="true">›</span>
+  </button>
 
   <div id="chips">
     <span class="label">Time:</span>
@@ -101,6 +143,32 @@
       <button id="setupSave" class="primary" type="button">Save</button>
     </div>
   </dialog>
+
+  <dialog id="otherDlg">
+    <h2>What time?</h2>
+    <div class="timerow">
+      <input id="timeIn" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="5" placeholder="4:30" aria-label="Time">
+      <div id="ampm">
+        <button type="button" data-ap="AM">AM</button>
+        <button type="button" data-ap="PM">PM</button>
+      </div>
+    </div>
+    <div class="hint" id="timeHint">Type the digits, like 430. No colon needed.</div>
+    <div class="err" id="timeErr"></div>
+    <div class="row">
+      <button id="timeCancel" type="button">Cancel</button>
+      <button id="timeUse" class="primary" type="button">Use time</button>
+    </div>
+  </dialog>
+
+  <section id="today" hidden>
+    <div id="todayBar"><button id="todayBack" type="button">‹ Back</button></div>
+    <div id="todayHead">
+      <h2>Today</h2>
+      <div id="todayNaps"></div>
+    </div>
+    <div id="timeline"></div>
+  </section>
 
   <script src="config.js"></script>
   <script src="app.js"></script>

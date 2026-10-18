@@ -1,6 +1,6 @@
 // Network-first for the app shell so updates arrive promptly, with a cache fallback so the
 // page still opens with no signal. Calls to the Apps Script endpoint are never cached.
-const CACHE = 'sleep-log-v1';
+const CACHE = 'sleep-log-v2';
 const SHELL = ['./', 'index.html', 'app.js', 'config.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
