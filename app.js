@@ -40,6 +40,11 @@
     mine: get('mine', []),      // my recent taps, for undo: [{id, prev}]
     last: get('last', null),    // what the banner shows: {event, ts, who}
     today: get('today', null),  // last Today payload from the server, plus asOf
+    todayDow: get('todayDow', null), // 0 = Monday, from the server
+    view: { mode: 'day', dayOff: 0, weekOff: 0 }, // what the Day/Week screen shows (0 = now, -1 = before)
+    cache: {},                  // fetched days/weeks by key ('d-2', 'w-1'); cleared when anything is logged
+    viewErr: false,
+    scrollReset: true,
     offset: 0,                  // "N min ago" chip
     customTs: null,             // exact time chosen with "Other…"
     ap: 'PM',
@@ -79,22 +84,25 @@
     return d.getTime();
   }
 
-  // ---- naps (from the server's Today payload) ----
-  // While taps are still waiting to sync, the cached numbers freeze at the time they were fetched.
-  function napTotals() {
-    var t = state.today;
-    if (!t) return null;
+  // ---- naps (from the server's day payloads) ----
+  // While taps are still waiting to sync, today's cached numbers freeze at the time they were fetched.
+  function napTotalsFor(d) {
+    if (!d) return null;
     var synced = state.queue.length === 0;
     var ms = 0, n = 0, live = false;
-    t.intervals.forEach(function (i) {
+    d.intervals.forEach(function (i) {
       if (!i.nap) return;
       n++;
       var end = i.end;
-      if (end === null) { end = synced ? Date.now() : t.asOf; live = synced; }
+      if (end === null) {
+        if (d.isToday !== false) { end = synced ? Date.now() : d.asOf; live = synced; }
+        else end = d.dayEnd;
+      }
       ms += Math.max(0, end - i.start);
     });
-    return { ms: ms, count: n, live: live, syncing: !synced };
+    return { ms: ms, count: n, live: live, syncing: d.isToday !== false && !synced };
   }
+  function napTotals() { return napTotalsFor(state.today); }
 
   function napsText(nt) {
     if (!nt) return '—';
@@ -102,8 +110,7 @@
     return fmtDur(nt.ms) + ' · ' + nt.count + (nt.count === 1 ? ' nap' : ' naps');
   }
 
-  function fillNaps(el) {
-    var nt = napTotals();
+  function fillNaps(el, nt) {
     el.textContent = '';
     el.appendChild(document.createTextNode(napsText(nt)));
     if (nt && nt.live) {
@@ -149,8 +156,8 @@
       }
     });
 
-    fillNaps($('napsVal'));
-    if (!$('today').hidden) renderToday();
+    fillNaps($('napsVal'), napTotals());
+    if (!$('today').hidden) renderView();
   }
 
   function setLast(l) {
@@ -164,10 +171,17 @@
     var t = Object.assign({}, res.today, { asOf: res.serverTime });
     state.today = t;
     set('today', t);
+    if (res.todayDow != null) { state.todayDow = res.todayDow; set('todayDow', res.todayDow); }
     render();
   }
 
-  // ---- Today screen ----
+  // ---- Day / Week screen ----
+  var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var DOWS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  var WEEK_PX_PER_MIN = 0.3;
+  var MIN_OFFSET_DAYS = -400;
+  var MIN_OFFSET_WEEKS = -57;
+
   function el(tag, cls, text) {
     var e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -175,23 +189,102 @@
     return e;
   }
 
-  function renderToday() {
+  function todayDow() {
+    if (state.todayDow != null) return state.todayDow;
+    return (new Date(Date.now() - 4 * 3600000).getDay() + 6) % 7; // device clock, 4 AM day start
+  }
+  function fmtDurShort(ms) {
+    var m = Math.round(ms / MIN);
+    if (m < 60) return m + 'm';
+    var r = m % 60;
+    return Math.floor(m / 60) + 'h' + (r < 10 ? '0' : '') + r;
+  }
+  function fmtClockShort(ts) {
+    var d = new Date(ts), h = d.getHours(), m = d.getMinutes();
+    return ((h % 12) || 12) + ':' + (m < 10 ? '0' : '') + m + (h < 12 ? 'a' : 'p');
+  }
+
+  // Payloads cached by an older version of the app lack a few fields; fill them in.
+  function normDay(d) {
+    if (!d) return d;
+    if (d.dayEnd == null) d.dayEnd = d.dayStart + 86400000;
+    if (d.isToday == null) d.isToday = true;
+    return d;
+  }
+  function dayAt(off) {
+    return normDay(off === 0 && state.today ? state.today : state.cache['d' + off] || null);
+  }
+  function weekAt(off) { return state.cache['w' + off] || null; }
+
+  function logicalDate(off) { // device-clock fallback for titles while a payload is still loading
+    var d = new Date(Date.now() - 4 * 3600000);
+    d.setDate(d.getDate() + off);
+    return d;
+  }
+  function dayTitleText(d, off) {
+    if (off === 0) return 'Today';
+    if (d && d.label) return DOWS[d.label.dow] + ' ' + MONTHS[d.label.m - 1] + ' ' + d.label.d;
+    var x = logicalDate(off);
+    return DOWS[(x.getDay() + 6) % 7] + ' ' + MONTHS[x.getMonth()] + ' ' + x.getDate();
+  }
+  function weekTitleText(w, off) {
+    var a, b;
+    if (w) { a = w.days[0].label; b = w.days[6].label; }
+    else {
+      var mon = logicalDate(7 * off - todayDow()), sun = logicalDate(7 * off - todayDow() + 6);
+      a = { m: mon.getMonth() + 1, d: mon.getDate() };
+      b = { m: sun.getMonth() + 1, d: sun.getDate() };
+    }
+    return MONTHS[a.m - 1] + ' ' + a.d + ' – ' + (a.m === b.m ? '' : MONTHS[b.m - 1] + ' ') + b.d;
+  }
+
+  // "7:10 PM Mon" / "yesterday" for a stretch that began before this day's 4 AM start (different calendar day only)
+  function startPrefix(i, d) {
+    if (i.start >= d.dayStart) return '';
+    var a = new Date(i.start), b = new Date(d.dayStart);
+    var diff = Math.round((new Date(b.getFullYear(), b.getMonth(), b.getDate()) -
+      new Date(a.getFullYear(), a.getMonth(), a.getDate())) / 86400000);
+    if (diff <= 0) return '';
+    return diff === 1 && d.isToday ? ' yesterday' : ' ' + a.toLocaleDateString([], { weekday: 'short' });
+  }
+
+  function renderView() {
+    var v = state.view, week = v.mode === 'week';
+    var off = week ? v.weekOff : v.dayOff;
+    document.querySelectorAll('#vseg button').forEach(function (b) {
+      b.classList.toggle('on', b.dataset.mode === v.mode);
+    });
+    $('vNext').disabled = off >= 0;
+    $('toToday').hidden = off >= 0;
+    $('toToday').textContent = week ? 'Back to this week' : 'Back to today';
+    $('timeline').hidden = week;
+    $('todayHead').hidden = week;
+    $('weekView').hidden = !week;
+    if (week) renderWeek(); else renderDay();
+  }
+
+  function renderDay() {
+    var off = state.view.dayOff, d = dayAt(off);
+    $('vTitle').textContent = dayTitleText(d, off);
     var box = $('timeline');
     var atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
     var prevTop = box.scrollTop;
-    var t = state.today;
-    fillNaps($('todayNaps'));
+    fillNaps($('todayNaps'), napTotalsFor(d));
+    $('todayWake').textContent = d && d.wake ? 'Woke ' + fmtTime(d.wake) : '';
     box.textContent = '';
-    if (!t || !t.intervals.length) {
-      box.appendChild(el('div', 'empty', t ? 'Nothing logged yet today.' : 'Loading today…'));
+    if (!d || !d.intervals.length) {
+      var msg = d ? (d.isToday ? 'Nothing logged yet today.' : 'Nothing logged this day.')
+        : (state.viewErr ? "Can't load this day. Check your connection." : 'Loading…');
+      box.appendChild(el('div', 'empty', msg));
       return;
     }
     var synced = state.queue.length === 0;
-    t.intervals.forEach(function (i) {
-      var open = i.end === null;
-      var end = open ? (synced ? Date.now() : t.asOf) : i.end;
-      var shownStart = Math.max(i.start, t.dayStart);
-      var minutes = Math.max(0, (end - shownStart) / MIN);
+    d.intervals.forEach(function (i) {
+      var open = i.end === null && d.isToday;
+      var end = i.end === null ? (d.isToday ? (synced ? Date.now() : d.asOf) : d.dayEnd) : i.end;
+      var shownStart = Math.max(i.start, d.dayStart);
+      var shownEnd = Math.min(end, d.dayEnd);
+      var minutes = Math.max(0, (shownEnd - shownStart) / MIN);
       var h = Math.max(minutes * PX_PER_MIN, MIN_BLOCK_PX);
       if (open) h = Math.max(h, NOW_BLOCK_PX);
       var tall = h >= TALL_PX || open;
@@ -202,10 +295,11 @@
       blk.dataset.event = i.event;
       blk.dataset.minutes = String(Math.round(minutes));
       var dur = fmtDur(end - i.start);
-      var startTxt = i.start < t.dayStart ? fmtTime(i.start) + ' yesterday' : fmtTime(i.start);
+      var startTxt = fmtTime(i.start) + startPrefix(i, d);
+      var endTxt = open ? 'now' : (i.end === null ? 'continues' : fmtTime(i.end));
       var left = el('span');
       if (tall) {
-        left.appendChild(el('span', 't1', startTxt + ' – ' + (open ? 'now' : fmtTime(i.end))));
+        left.appendChild(el('span', 't1', startTxt + ' – ' + endTxt));
         left.appendChild(el('span', 'name', LABELS[i.event] || i.event));
       } else {
         left.textContent = startTxt + ' · ' + (LABELS[i.event] || i.event);
@@ -224,14 +318,151 @@
       }
       box.appendChild(blk);
     });
-    box.scrollTop = atBottom ? box.scrollHeight : prevTop;
+    if (state.scrollReset) { box.scrollTop = d.isToday ? box.scrollHeight : 0; state.scrollReset = false; }
+    else box.scrollTop = atBottom ? box.scrollHeight : prevTop;
+  }
+
+  function renderWeek() {
+    var off = state.view.weekOff, w = weekAt(off);
+    $('vTitle').textContent = weekTitleText(w, off);
+    var sum = $('weekSum'), cols = $('weekCols');
+    sum.textContent = '';
+    cols.textContent = '';
+    sum.className = '';
+    cols.className = '';
+    $('weekHint').hidden = !w;
+    if (!w) {
+      sum.appendChild(el('div', 'empty hint', state.viewErr ? "Can't load this week. Check your connection." : 'Loading…'));
+      return;
+    }
+    var now = Date.now();
+    sum.className = 'wgrid';
+    sum.appendChild(el('div', 'lab'));
+    w.days.forEach(function (d, i) {
+      var hd = el('div', 'c hd' + (d.isToday ? ' today' : '') + (d.isFuture ? '' : ' tap'));
+      hd.appendChild(document.createTextNode(DOWS[i][0]));
+      hd.appendChild(document.createElement('br'));
+      hd.appendChild(document.createTextNode(String(d.label.d)));
+      hd.dataset.i = String(i);
+      sum.appendChild(hd);
+    });
+    var totals = w.days.map(function (d) { return napTotalsFor(normDay(d)); });
+    [['Naps', function (d, t) { return fmtDurShort(t.ms); }],
+     ['# naps', function (d, t) { return String(t.count); }],
+     ['Woke', function (d) { return d.wake ? fmtClockShort(d.wake) : '–'; }]].forEach(function (row, r) {
+      sum.appendChild(el('div', 'lab', row[0]));
+      w.days.forEach(function (d, i) {
+        var blank = d.isFuture || !d.intervals.length;
+        var c = el('div', 'c' + (r === 0 ? ' nap' : ''), blank ? '–' : row[1](d, totals[i]));
+        c.dataset.row = row[0];
+        sum.appendChild(c);
+      });
+    });
+
+    var H = 1440 * WEEK_PX_PER_MIN;
+    cols.className = 'wcols';
+    var axis = el('div', 'waxis');
+    axis.style.height = H + 'px';
+    [['4a', 0], ['8a', 240], ['12p', 480], ['4p', 720], ['8p', 960], ['12a', 1200]].forEach(function (a) {
+      var t = el('span', null, a[0]);
+      t.style.top = (a[1] * WEEK_PX_PER_MIN) + 'px';
+      axis.appendChild(t);
+    });
+    cols.appendChild(axis);
+    w.days.forEach(function (d, i) {
+      var col = el('div', 'wcol' + (d.isFuture ? ' future' : ''));
+      col.style.height = H + 'px';
+      col.dataset.i = String(i);
+      [0, 240, 480, 720, 960, 1200].forEach(function (m) {
+        var hl = el('div', 'hl');
+        hl.style.top = (m * WEEK_PX_PER_MIN) + 'px';
+        col.appendChild(hl);
+      });
+      d.intervals.forEach(function (iv) {
+        var start = Math.max(iv.start, d.dayStart);
+        var end = iv.end === null ? (d.isToday ? now : d.dayEnd) : Math.min(iv.end, d.dayEnd);
+        var a = (start - d.dayStart) / MIN, b = (end - d.dayStart) / MIN;
+        var blk = el('div', 'b');
+        blk.style.top = (a * WEEK_PX_PER_MIN) + 'px';
+        blk.style.height = Math.max((b - a) * WEEK_PX_PER_MIN, 1.5) + 'px';
+        blk.style.background = COLORS[iv.event] || '#ddd';
+        blk.dataset.event = iv.event;
+        col.appendChild(blk);
+      });
+      if (d.isToday) {
+        var nl = el('div', 'nowline');
+        nl.style.top = (Math.max(0, now - d.dayStart) / MIN * WEEK_PX_PER_MIN) + 'px';
+        col.appendChild(nl);
+      }
+      cols.appendChild(col);
+    });
+  }
+
+  // Fetch what the screen is showing. Today comes from the regular status refresh.
+  function loadView() {
+    var v = state.view;
+    if (v.mode === 'day' && v.dayOff === 0) return refresh();
+    if (!URL_ || !get('token', '')) return Promise.resolve();
+    var week = v.mode === 'week';
+    var key = week ? 'w' + v.weekOff : 'd' + v.dayOff;
+    state.viewErr = false;
+    return post({ action: week ? 'week' : 'day', offset: week ? v.weekOff : v.dayOff }).then(function (res) {
+      if (res && res.ok) {
+        var payload = week ? res.week : res.day;
+        if (!week) payload.asOf = res.serverTime;
+        else payload.days.forEach(function (d) { d.asOf = res.serverTime; });
+        state.cache[key] = payload;
+        if (res.todayDow != null) { state.todayDow = res.todayDow; set('todayDow', res.todayDow); }
+      } else if (res && res.error === 'unauthorized') {
+        state.syncBad = true;
+        state.syncMsg = 'Wrong setup code';
+      } else {
+        state.viewErr = true;
+      }
+    }).catch(function () {
+      state.viewErr = true;
+    }).finally(function () {
+      if (!$('today').hidden) renderView();
+    });
+  }
+
+  function goTo(mode, dayOff, weekOff) {
+    state.view = { mode: mode, dayOff: dayOff, weekOff: weekOff };
+    state.scrollReset = true;
+    renderView();
+    return loadView();
+  }
+
+  function setMode(m) {
+    var v = state.view;
+    if (v.mode === m) return;
+    var dow = todayDow();
+    var weekOff = v.weekOff, dayOff = v.dayOff;
+    if (m === 'week') {
+      weekOff = Math.floor((dow + v.dayOff) / 7);   // the week that contains the day you were on
+    } else {
+      var first = 7 * v.weekOff - dow, last = first + 6;
+      if (dayOff < first || dayOff > last) dayOff = Math.min(0, last);
+    }
+    goTo(m, dayOff, weekOff);
+  }
+
+  function step(delta) {
+    var v = state.view;
+    if (v.mode === 'week') goTo('week', v.dayOff, Math.max(MIN_OFFSET_WEEKS, Math.min(0, v.weekOff + delta)));
+    else goTo('day', Math.max(MIN_OFFSET_DAYS, Math.min(0, v.dayOff + delta)), v.weekOff);
+  }
+
+  function openDayFromWeek(i) {
+    var w = weekAt(state.view.weekOff);
+    if (!w || w.days[i].isFuture) return;
+    goTo('day', 7 * state.view.weekOff + i - todayDow(), state.view.weekOff);
   }
 
   function openToday() {
     $('today').hidden = false;
-    renderToday();
+    goTo('day', 0, 0);
     $('timeline').scrollTop = $('timeline').scrollHeight; // start at "now"
-    refresh();
   }
   function closeToday() { $('today').hidden = true; }
 
@@ -357,6 +588,8 @@
     }).finally(function () {
       state.flushing = false;
       render();
+      var v = state.view;
+      if (!$('today').hidden && !state.queue.length && !(v.mode === 'day' && v.dayOff === 0)) loadView();
     });
   }
 
@@ -394,6 +627,7 @@
     set('mine', state.mine);
     state.queue.push(op);
     set('queue', state.queue);
+    state.cache = {};
     setLast({ event: ev, ts: op.ts, who: op.who });
     state.offset = 0;
     state.customTs = null;
@@ -413,6 +647,7 @@
     if (i >= 0) state.queue.splice(i, 1); // never sent, just drop it
     else state.queue.push({ type: 'undo', id: m.id });
     set('queue', state.queue);
+    state.cache = {};
     setLast(m.prev);
     flush();
   }
@@ -531,6 +766,16 @@
   $('timeCancel').addEventListener('click', function () { $('otherDlg').close(); });
   $('naps').addEventListener('click', openToday);
   $('todayBack').addEventListener('click', closeToday);
+  $('vPrev').addEventListener('click', function () { step(-1); });
+  $('vNext').addEventListener('click', function () { step(1); });
+  $('toToday').addEventListener('click', function () { goTo(state.view.mode, 0, 0); });
+  document.querySelectorAll('#vseg button').forEach(function (b) {
+    b.addEventListener('click', function () { setMode(b.dataset.mode); });
+  });
+  $('weekView').addEventListener('click', function (e) {
+    var t = e.target.closest('[data-i]');
+    if (t) openDayFromWeek(Number(t.dataset.i));
+  });
   $('undo').addEventListener('click', undo);
   $('gear').addEventListener('click', openSetup);
   $('setupSave').addEventListener('click', saveSetup);
@@ -541,7 +786,12 @@
     if (!document.hidden) { render(); flush().then(refresh); }
   });
   setInterval(function () { if (!document.hidden) render(); }, 15000);
-  setInterval(function () { if (!document.hidden) refresh(); }, 30000);
+  setInterval(function () {
+    if (document.hidden) return;
+    refresh();
+    var v = state.view;
+    if (!$('today').hidden && !(v.mode === 'day' && v.dayOff === 0)) loadView(); // keep past days/weeks fresh too
+  }, 30000);
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(function () { /* app works without it */ });
