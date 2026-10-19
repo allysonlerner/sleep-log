@@ -14,7 +14,7 @@
 <style>
   :root {
     --bg: #0f1115; --fg: #e8eaed; --muted: #8b919a; --card: #1a1d23;
-    --crib: #FFF2CC; --sleeping: #CFE2F3; --awake: #B6D7A8; --nursing: #D9D2E9; --crying: #F4CCCC;
+    --crib: #FFF2CC; --sleeping: #B6D7A8; --awake: #2a2f37; --nursing: #D9D2E9; --crying: #F4CCCC;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg);
@@ -25,7 +25,9 @@
     padding: 12px 14px; min-height: 66px; }
   #nowMain { font-size: 22px; font-weight: 700; }
   #nowSub { font-size: 14px; color: var(--muted); margin-top: 2px; }
-  #chips { display: flex; gap: 8px; align-items: center; overflow-x: auto; }
+  #chips { display: flex; gap: 8px; align-items: center; overflow-x: auto; padding-bottom: 2px;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  #chips::-webkit-scrollbar { display: none; }
   #chips .label { color: var(--muted); font-size: 13px; flex: none; }
   .chip { flex: none; border: 1px solid #3a3f48; background: transparent; color: var(--fg); border-radius: 999px;
     padding: 8px 14px; font-size: 15px; }
@@ -33,6 +35,7 @@
   #buttons { flex: 1; display: grid; grid-template-rows: repeat(5, 1fr); gap: 10px; min-height: 0; }
   .ev { border: 0; border-radius: 16px; font-size: 28px; font-weight: 800; color: #222; filter: brightness(.88);
     transition: transform .06s, filter .15s; }
+  .ev[data-ev="awake"] { color: #c9ced6; border: 1px solid #3a3f48; filter: none; }
   .ev:active { transform: scale(.98); filter: brightness(1); }
   .ev.flash { filter: brightness(1.15); }
   #foot { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; }
@@ -44,7 +47,9 @@
   #sync { font-size: 12px; color: var(--muted); min-width: 90px; text-align: right; }
   #sync.bad { color: #f28b82; }
   dialog { background: var(--card); color: var(--fg); border: 1px solid #3a3f48; border-radius: 16px; padding: 20px;
-    width: min(92vw, 420px); }
+    width: min(92vw, 420px); position: fixed; inset: auto; margin: 0; top: 50%; left: 50%;
+    transform: translate(-50%, -50%); max-height: calc(100dvh - 24px); overflow-y: auto; }
+  html.kb dialog { top: var(--dlg-top, 12px); transform: translateX(-50%); max-height: var(--dlg-max, calc(100dvh - 24px)); }
   dialog::backdrop { background: rgba(0,0,0,.7); }
   dialog h2 { margin: 0 0 12px; font-size: 20px; }
   dialog label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
@@ -60,9 +65,9 @@
     animation: pulse 1.4s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
   #naps { display: flex; align-items: center; justify-content: space-between; width: 100%; text-align: left;
-    background: var(--card); border: 1px solid #CFE2F3; border-radius: 12px; padding: 8px 14px; color: var(--fg); font: inherit; }
+    background: var(--card); border: 1px solid #B6D7A8; border-radius: 12px; padding: 8px 14px; color: var(--fg); font: inherit; }
   #naps .lab { font-size: 12px; color: var(--muted); }
-  #napsVal { font-size: 17px; font-weight: 600; color: #CFE2F3; display: flex; align-items: center; gap: 8px; }
+  #napsVal { font-size: 17px; font-weight: 600; color: #B6D7A8; display: flex; align-items: center; gap: 8px; }
   #napsVal small { font-size: 12px; font-weight: 400; color: var(--muted); }
   #naps .chev { font-size: 22px; color: var(--muted); }
   .timerow { display: flex; gap: 8px; align-items: stretch; }
@@ -77,7 +82,7 @@
   #todayBack { border: 0; background: transparent; color: var(--muted); font-size: 16px; padding: 8px 4px; }
   #todayHead { background: var(--card); border-radius: 12px; padding: 10px 14px; }
   #todayHead h2 { margin: 0; font-size: 20px; }
-  #todayNaps { font-size: 14px; color: #CFE2F3; margin-top: 2px; display: flex; align-items: center; gap: 8px; }
+  #todayNaps { font-size: 14px; color: #B6D7A8; margin-top: 2px; display: flex; align-items: center; gap: 8px; }
   #timeline { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding-bottom: 12px;
     -webkit-overflow-scrolling: touch; }
   #timeline .empty { color: var(--muted); text-align: center; margin-top: 40px; }
@@ -132,10 +137,10 @@
   <dialog id="setup">
     <h2 id="setupTitle">Set up this phone</h2>
     <label for="nameIn">Your name (shown next to what you log)</label>
-    <input id="nameIn" autocomplete="off" placeholder="e.g. Sam">
+    <input id="nameIn" autocomplete="off" enterkeyhint="done" placeholder="e.g. Sam">
     <div id="codeWrap">
       <label for="codeIn">Setup code</label>
-      <input id="codeIn" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="paste the code here">
+      <input id="codeIn" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" placeholder="paste the code here">
     </div>
     <div class="hint" id="setupHint"></div>
     <div class="row">
@@ -147,7 +152,7 @@
   <dialog id="otherDlg">
     <h2>What time?</h2>
     <div class="timerow">
-      <input id="timeIn" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="5" placeholder="4:30" aria-label="Time">
+      <input id="timeIn" inputmode="numeric" pattern="[0-9]*" autocomplete="off" enterkeyhint="done" maxlength="5" placeholder="4:30" aria-label="Time">
       <div id="ampm">
         <button type="button" data-ap="AM">AM</button>
         <button type="button" data-ap="PM">PM</button>

@@ -2,7 +2,9 @@
   'use strict';
 
   var LABELS = { crib: 'Down in crib', sleeping: 'Sleeping', awake: 'Awake', nursing: 'Nursing', crying: 'Crying' };
-  var COLORS = { crib: '#FFF2CC', sleeping: '#CFE2F3', awake: '#B6D7A8', nursing: '#D9D2E9', crying: '#F4CCCC' };
+  var COLORS = { crib: '#FFF2CC', sleeping: '#B6D7A8', awake: '#2a2f37', nursing: '#D9D2E9', crying: '#F4CCCC' };
+  var TEXT_ON = { awake: '#c9ced6' };            // everything else uses dark text on its pastel
+  var STRIPE = { awake: '#6b7280' };             // banner edge: Awake is quiet, but the stripe still needs to show
   var URL_ = (window.SLEEP_CONFIG && window.SLEEP_CONFIG.url) || '';
   var MIN = 60000;
   var PX_PER_MIN = 1;       // Today screen: block height = minutes, with a floor so text fits
@@ -125,7 +127,7 @@
     if (l) {
       $('nowMain').textContent = LABELS[l.event] || l.event;
       $('nowSub').textContent = 'since ' + fmtTime(l.ts) + ' (' + fmtElapsed(Date.now() - l.ts) + ') · ' + (l.who || '');
-      now.style.borderLeftColor = COLORS[l.event] || '#8b919a';
+      now.style.borderLeftColor = STRIPE[l.event] || COLORS[l.event] || '#8b919a';
     } else {
       $('nowMain').textContent = 'Nothing logged yet';
       $('nowSub').textContent = '';
@@ -196,6 +198,7 @@
       var blk = el('div', 'blk' + (tall ? ' tall' : '') + (open ? ' now' : ''));
       blk.style.height = Math.round(h) + 'px';
       blk.style.background = COLORS[i.event] || '#ddd';
+      blk.style.color = TEXT_ON[i.event] || '#222';
       blk.dataset.event = i.event;
       blk.dataset.minutes = String(Math.round(minutes));
       var dur = fmtDur(end - i.start);
@@ -285,6 +288,7 @@
     $('timeHint').textContent = 'Type the digits, like 430. No colon needed.';
     var d = $('otherDlg');
     if (!d.open) d.showModal();
+    placeDialogs();
     $('timeIn').focus();
   }
   function useOtherTime() {
@@ -419,6 +423,7 @@
   function openSetup() {
     var hasToken = !!get('token', '');
     $('setupTitle').textContent = ready() ? 'Settings' : 'Set up this phone';
+    $('setupSave').textContent = ready() ? 'Done' : 'Save';
     $('nameIn').value = get('name', '');
     $('codeIn').value = '';
     $('codeIn').placeholder = hasToken ? 'saved (paste to replace)' : 'paste the code here';
@@ -428,6 +433,7 @@
       : 'The setup code is created by the Sheet\'s "Sleep tracker" menu. Everyone logging uses the same code.';
     var d = $('setup');
     if (!d.open) d.showModal();
+    placeDialogs();
   }
 
   function saveSetup() {
@@ -449,6 +455,41 @@
     var done = function () { $('setupHint').textContent = 'Link copied. Send it to your partner; opening it sets them up.'; };
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(link).then(done, function () { prompt('Copy this link:', link); });
     else prompt('Copy this link:', link);
+  }
+
+  // ---- dialogs: stay above the on-screen keyboard, tap outside to close ----
+  function placeDialogs() {
+    var vv = window.visualViewport;
+    if (!vv) return;
+    var root = document.documentElement;
+    root.classList.toggle('kb', window.innerHeight - vv.height > 120); // keyboard is up
+    root.style.setProperty('--dlg-top', Math.round(vv.offsetTop + 12) + 'px');
+    root.style.setProperty('--dlg-max', Math.round(vv.height - 24) + 'px');
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', placeDialogs);
+    window.visualViewport.addEventListener('scroll', placeDialogs);
+  }
+
+  function onOutsideTap(dlg, fn) {
+    dlg.addEventListener('click', function (e) {
+      if (e.target !== dlg) return; // a click on the padding also lands here, so check the box
+      var r = dlg.getBoundingClientRect();
+      var inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+      if (!inside) fn();
+    });
+  }
+
+  // Settings closes like any settings sheet: whatever you typed is kept. First-run setup can't be skipped.
+  function dismissSetup() {
+    if (!ready()) return;
+    var name = $('nameIn').value.trim();
+    var code = $('codeIn').value.trim();
+    if (name) set('name', name);
+    if (code) { set('token', code); state.syncBad = false; state.syncMsg = ''; }
+    $('setup').close();
+    render();
+    if (code) flush().then(refresh);
   }
 
   // ---- wiring ----
@@ -476,6 +517,17 @@
     });
   });
   $('timeUse').addEventListener('click', useOtherTime);
+  onOutsideTap($('otherDlg'), function () { $('otherDlg').close(); });
+  onOutsideTap($('setup'), dismissSetup);
+  $('setup').addEventListener('cancel', function (e) { e.preventDefault(); dismissSetup(); }); // Escape / Android back
+  function onEnter(id, fn) {
+    $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); fn(); } });
+  }
+  onEnter('timeIn', useOtherTime);
+  onEnter('nameIn', function () {
+    if (get('token', '') || $('codeIn').value.trim()) saveSetup(); else $('codeIn').focus();
+  });
+  onEnter('codeIn', saveSetup);
   $('timeCancel').addEventListener('click', function () { $('otherDlg').close(); });
   $('naps').addEventListener('click', openToday);
   $('todayBack').addEventListener('click', closeToday);
