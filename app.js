@@ -42,7 +42,9 @@
     today: get('today', null),  // last Today payload from the server, plus asOf
     todayDow: get('todayDow', null), // 0 = Monday, from the server
     view: { mode: 'day', dayOff: 0, weekOff: 0 }, // what the Day/Week screen shows (0 = now, -1 = before)
-    cache: {},                  // fetched days/weeks by key ('d-2', 'w-1'); cleared when anything is logged
+    weeks: loadWeeks(),         // weeks saved on this phone, by the Monday they start: {ms: {at, v}}
+    inflight: {},               // week requests in progress, so the same one isn't sent twice
+    warmed: false,
     viewErr: false,
     scrollReset: true,
     offset: 0,                  // "N min ago" chip
@@ -211,10 +213,50 @@
     if (d.isToday == null) d.isToday = true;
     return d;
   }
-  function dayAt(off) {
-    return normDay(off === 0 && state.today ? state.today : state.cache['d' + off] || null);
+  // ---- saved weeks (kept on this phone so screens open instantly, then refresh quietly) ----
+  var KEEP_WEEKS = 8;
+  var FRESH_THIS_WEEK_MS = 30000;      // the current week changes as you log
+  var FRESH_PAST_WEEK_MS = 10 * 60000; // past weeks only change if you edit the Log by hand
+
+  function loadWeeks() {
+    var w = get('weeks', {});
+    return w && typeof w === 'object' && !Array.isArray(w) ? w : {};
   }
-  function weekAt(off) { return state.cache['w' + off] || null; }
+  // Monday 4:00 AM (this phone's clock) of the week `off` weeks back. Saved weeks are matched on the
+  // date they cover, not on a counter, so a week saved last Tuesday is "last week" this Tuesday.
+  function mondayMs(off) {
+    var d = new Date(Date.now() - 4 * 3600000);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate() - todayDow() + 7 * off, 4, 0, 0, 0).getTime();
+  }
+  function weekEntry(off) {
+    var target = mondayMs(off), found = null;
+    Object.keys(state.weeks).forEach(function (k) {
+      if (Math.abs(Number(k) - target) < 6 * 3600000) found = state.weeks[k];
+    });
+    return found;
+  }
+  function weekAt(off) { var e = weekEntry(off); return e ? e.v : null; }
+  function weekFresh(off) {
+    var e = weekEntry(off);
+    return !!e && Date.now() - e.at < (off === 0 ? FRESH_THIS_WEEK_MS : FRESH_PAST_WEEK_MS);
+  }
+  function saveWeeks() {
+    var floor = mondayMs(-(KEEP_WEEKS - 1)) - 6 * 3600000;
+    Object.keys(state.weeks).forEach(function (k) { if (Number(k) < floor) delete state.weeks[k]; });
+    set('weeks', state.weeks);
+  }
+  // Something was logged: keep showing what we have, but fetch again the next time it is needed.
+  function staleWeeks() {
+    Object.keys(state.weeks).forEach(function (k) { state.weeks[k].at = 0; });
+    set('weeks', state.weeks);
+  }
+  // A day is a slice of its week, so moving between days of a week needs no new request.
+  function dayAt(off) {
+    if (off === 0 && state.today) return normDay(state.today);
+    var idx = todayDow() + off, w = Math.floor(idx / 7);
+    var wk = weekAt(w);
+    return wk ? normDay(wk.days[idx - 7 * w]) : null;
+  }
 
   function logicalDate(off) { // device-clock fallback for titles while a payload is still loading
     var d = new Date(Date.now() - 4 * 3600000);
@@ -398,32 +440,53 @@
     });
   }
 
-  // Fetch what the screen is showing. Today comes from the regular status refresh.
-  function loadView() {
-    var v = state.view;
-    if (v.mode === 'day' && v.dayOff === 0) return refresh();
+  // `quiet` = we already have something to show, so a failure shouldn't replace it with an error.
+  function fetchWeek(off, quiet) {
     if (!URL_ || !get('token', '')) return Promise.resolve();
-    var week = v.mode === 'week';
-    var key = week ? 'w' + v.weekOff : 'd' + v.dayOff;
-    state.viewErr = false;
-    return post({ action: week ? 'week' : 'day', offset: week ? v.weekOff : v.dayOff }).then(function (res) {
+    if (state.inflight[off]) return state.inflight[off];
+    if (!quiet) state.viewErr = false;
+    var p = post({ action: 'week', offset: off }).then(function (res) {
       if (res && res.ok) {
-        var payload = week ? res.week : res.day;
-        if (!week) payload.asOf = res.serverTime;
-        else payload.days.forEach(function (d) { d.asOf = res.serverTime; });
-        state.cache[key] = payload;
+        res.week.days.forEach(function (d) { d.asOf = res.serverTime; });
+        state.weeks[String(res.week.days[0].dayStart)] = { at: Date.now(), v: res.week };
+        saveWeeks();
         if (res.todayDow != null) { state.todayDow = res.todayDow; set('todayDow', res.todayDow); }
       } else if (res && res.error === 'unauthorized') {
         state.syncBad = true;
         state.syncMsg = 'Wrong setup code';
-      } else {
+      } else if (!quiet) {
         state.viewErr = true;
       }
     }).catch(function () {
-      state.viewErr = true;
+      if (!quiet) state.viewErr = true;
     }).finally(function () {
+      delete state.inflight[off];
       if (!$('today').hidden) renderView();
     });
+    state.inflight[off] = p;
+    return p;
+  }
+
+  // Show what's saved right away; refresh in the background if it is out of date.
+  // Today comes from the regular status refresh.
+  function loadView() {
+    var v = state.view;
+    if (v.mode === 'day' && v.dayOff === 0) return refresh();
+    var off = v.mode === 'week' ? v.weekOff : Math.floor((todayDow() + v.dayOff) / 7);
+    var p = weekFresh(off) ? Promise.resolve() : fetchWeek(off, !!weekAt(off));
+    if (off - 1 >= -(KEEP_WEEKS - 1) && !weekFresh(off - 1)) fetchWeek(off - 1, true); // for the ‹ arrow
+    return p;
+  }
+
+  // Soon after the app opens, quietly load this week and last, so the screens are ready when you tap.
+  function warmUp() {
+    if (state.warmed || !URL_ || !get('token', '')) return;
+    state.warmed = true;
+    setTimeout(function () {
+      if (state.queue.length || document.hidden) { state.warmed = false; return; } // taps first; try again later
+      var first = weekFresh(0) ? Promise.resolve() : fetchWeek(0, true);
+      first.then(function () { if (!weekFresh(-1) && !state.queue.length) return fetchWeek(-1, true); });
+    }, 1500);
   }
 
   function goTo(mode, dayOff, weekOff) {
@@ -602,6 +665,7 @@
         setToday(res);
         state.syncBad = false;
         state.syncMsg = '';
+        warmUp();
       } else if (res && res.error === 'unauthorized') {
         state.syncBad = true;
         state.syncMsg = 'Wrong setup code';
@@ -627,7 +691,7 @@
     set('mine', state.mine);
     state.queue.push(op);
     set('queue', state.queue);
-    state.cache = {};
+    staleWeeks();
     setLast({ event: ev, ts: op.ts, who: op.who });
     state.offset = 0;
     state.customTs = null;
@@ -647,7 +711,7 @@
     if (i >= 0) state.queue.splice(i, 1); // never sent, just drop it
     else state.queue.push({ type: 'undo', id: m.id });
     set('queue', state.queue);
-    state.cache = {};
+    staleWeeks();
     setLast(m.prev);
     flush();
   }
@@ -698,7 +762,7 @@
     if (!vv) return;
     var root = document.documentElement;
     root.classList.toggle('kb', window.innerHeight - vv.height > 120); // keyboard is up
-    root.style.setProperty('--dlg-top', Math.round(vv.offsetTop + 12) + 'px');
+    root.style.setProperty('--dlg-center', Math.round(vv.offsetTop + vv.height / 2) + 'px'); // middle of what's visible
     root.style.setProperty('--dlg-max', Math.round(vv.height - 24) + 'px');
   }
   if (window.visualViewport) {
@@ -783,7 +847,7 @@
 
   window.addEventListener('online', function () { flush().then(refresh); });
   document.addEventListener('visibilitychange', function () {
-    if (!document.hidden) { render(); flush().then(refresh); }
+    if (!document.hidden) { state.warmed = false; render(); flush().then(refresh); }
   });
   setInterval(function () { if (!document.hidden) render(); }, 15000);
   setInterval(function () {

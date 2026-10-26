@@ -26,12 +26,12 @@
     padding: 12px 14px; min-height: 66px; }
   #nowMain { font-size: 22px; font-weight: 700; }
   #nowSub { font-size: 14px; color: var(--muted); margin-top: 2px; }
-  #chips { display: flex; gap: 8px; align-items: center; overflow-x: auto; padding-bottom: 2px;
+  #chips { display: flex; gap: 6px; align-items: center; overflow-x: auto; padding-bottom: 2px;
     scrollbar-width: none; -webkit-overflow-scrolling: touch; }
   #chips::-webkit-scrollbar { display: none; }
-  #chips .label { color: var(--muted); font-size: 13px; flex: none; }
-  .chip { flex: none; border: 1px solid #3a3f48; background: transparent; color: var(--fg); border-radius: 999px;
-    padding: 8px 14px; font-size: 15px; }
+  .chip { flex: 1 0 auto; border: 1px solid #3a3f48; background: transparent; color: var(--fg); border-radius: 999px;
+    padding: 8px 8px; font-size: 15px; white-space: nowrap; }
+  @media (max-width: 360px) { .chip { padding: 8px 5px; font-size: 14px; } }
   .chip.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
   #buttons { flex: 1; display: grid; grid-template-rows: repeat(5, 1fr); gap: 10px; min-height: 0; }
   .ev { border: 0; border-radius: 16px; font-size: 28px; font-weight: 800; color: #222; filter: brightness(.88);
@@ -50,7 +50,8 @@
   dialog { background: var(--card); color: var(--fg); border: 1px solid #3a3f48; border-radius: 16px; padding: 20px;
     width: min(92vw, 420px); position: fixed; inset: auto; margin: 0; top: 50%; left: 50%;
     transform: translate(-50%, -50%); max-height: calc(100dvh - 24px); overflow-y: auto; }
-  html.kb dialog { top: var(--dlg-top, 12px); transform: translateX(-50%); max-height: var(--dlg-max, calc(100dvh - 24px)); }
+  /* keyboard up: center in the space above it (--dlg-center is that space's midpoint) */
+  html.kb dialog { top: var(--dlg-center, 50%); max-height: var(--dlg-max, calc(100dvh - 24px)); }
   dialog::backdrop { background: rgba(0,0,0,.7); }
   dialog h2 { margin: 0 0 12px; font-size: 20px; }
   dialog label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
@@ -137,12 +138,10 @@
   </button>
 
   <div id="chips">
-    <span class="label">Time:</span>
     <button class="chip on" data-min="0">Now</button>
-    <button class="chip" data-min="5">5 min ago</button>
-    <button class="chip" data-min="10">10 min ago</button>
-    <button class="chip" data-min="15">15 min ago</button>
-    <button class="chip" data-min="30">30 min ago</button>
+    <button class="chip" data-min="2">2 mins</button>
+    <button class="chip" data-min="5">5 mins</button>
+    <button class="chip" data-min="10">10 mins</button>
     <button class="chip" data-min="other">Other…</button>
   </div>
 
