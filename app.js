@@ -312,7 +312,10 @@
     var atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
     var prevTop = box.scrollTop;
     fillNaps($('todayNaps'), napTotalsFor(d));
-    $('todayWake').textContent = d && d.wake ? 'Woke ' + fmtTime(d.wake) : '';
+    var bits = [];
+    if (d && d.prevBed) bits.push('Prev bed ' + fmtTime(d.prevBed));
+    if (d && d.wake) bits.push('Wake up ' + fmtTime(d.wake));
+    $('todayWake').textContent = bits.join(' · ');
     box.textContent = '';
     if (!d || !d.intervals.length) {
       var msg = d ? (d.isToday ? 'Nothing logged yet today.' : 'Nothing logged this day.')
@@ -389,13 +392,14 @@
       sum.appendChild(hd);
     });
     var totals = w.days.map(function (d) { return napTotalsFor(normDay(d)); });
-    [['Naps', function (d, t) { return fmtDurShort(t.ms); }],
+    [['Prev bed', function (d) { return d.prevBed ? fmtClockShort(d.prevBed) : '–'; }],
+     ['Wake up', function (d) { return d.wake ? fmtClockShort(d.wake) : '–'; }],
      ['# naps', function (d, t) { return String(t.count); }],
-     ['Woke', function (d) { return d.wake ? fmtClockShort(d.wake) : '–'; }]].forEach(function (row, r) {
+     ['Naptime', function (d, t) { return fmtDurShort(t.ms); }]].forEach(function (row) {
       sum.appendChild(el('div', 'lab', row[0]));
       w.days.forEach(function (d, i) {
         var blank = d.isFuture || !d.intervals.length;
-        var c = el('div', 'c' + (r === 0 ? ' nap' : ''), blank ? '–' : row[1](d, totals[i]));
+        var c = el('div', 'c' + (row[0] === 'Naptime' ? ' nap' : ''), blank ? '–' : row[1](d, totals[i]));
         c.dataset.row = row[0];
         sum.appendChild(c);
       });
