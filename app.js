@@ -37,7 +37,8 @@
   var $ = function (id) { return document.getElementById(id); };
   var state = {
     queue: get('queue', []),    // pending ops: {type:'log'|'undo', id, event, ts, who}
-    mine: get('mine', []),      // my recent taps, for undo: [{id, prev}]
+    recent: get('recent', []),  // the last few entries by ANYONE, newest first (from the server): what Undo works on
+    undoNote: '',               // brief "Undid …" confirmation shown on the Undo button
     last: get('last', null),    // what the banner shows: {event, ts, who}
     today: get('today', null),  // last Today payload from the server, plus asOf
     todayDow: get('todayDow', null), // 0 = Monday, from the server
@@ -146,7 +147,10 @@
     var s = $('sync');
     s.className = state.syncBad ? 'bad' : '';
     s.textContent = state.syncMsg || (pending ? pending + ' waiting to sync' : '');
-    $('undo').disabled = state.mine.length === 0;
+    var next = undoStack()[0];
+    $('undo').disabled = !next;
+    $('undo').classList.toggle('done', !!state.undoNote);
+    $('undoNote').textContent = state.undoNote || (next ? entryLabel(next) : '');
 
     var custom = state.customTs !== null;
     document.querySelectorAll('.chip').forEach(function (c) {
@@ -173,6 +177,7 @@
     var t = Object.assign({}, res.today, { asOf: res.serverTime });
     state.today = t;
     set('today', t);
+    if (res.recent) { state.recent = res.recent; set('recent', res.recent); }
     if (res.todayDow != null) { state.todayDow = res.todayDow; set('todayDow', res.todayDow); }
     render();
   }
@@ -611,6 +616,12 @@
     }).then(function (r) { return r.json(); }).finally(function () { clearTimeout(timer); });
   }
 
+  function removeOp(op) {
+    var i = state.queue.indexOf(op);
+    if (i >= 0) state.queue.splice(i, 1);
+    set('queue', state.queue);
+  }
+
   function flush() {
     if (state.flushing || !URL_) return Promise.resolve();
     state.flushing = true;
@@ -622,8 +633,7 @@
         : { action: 'log', id: op.id, event: op.event, ts: op.ts, who: op.who };
       return post(body).then(function (res) {
         if (res && res.ok) {
-          state.queue.shift();
-          set('queue', state.queue);
+          removeOp(op);
           state.syncBad = false;
           state.syncMsg = '';
           return state.queue.length ? step() : res;
@@ -637,8 +647,7 @@
           state.syncMsg = 'Retrying…';
           return null;
         }
-        state.queue.shift(); // bad_request: will never succeed, don't block the rest
-        set('queue', state.queue);
+        removeOp(op); // bad_request: will never succeed, don't block the rest
         return state.queue.length ? step() : res;
       });
     }
@@ -689,14 +698,11 @@
     if (nowMs - lastTapAt < 600) return; // swallow double taps
     lastTapAt = nowMs;
     var ts = state.customTs !== null ? state.customTs : nowMs - state.offset * MIN;
-    var op = { type: 'log', id: uid(), event: ev, ts: ts, who: get('name', '') };
-    state.mine.push({ id: op.id, prev: state.last });
-    if (state.mine.length > 20) state.mine.shift();
-    set('mine', state.mine);
+    var op = { type: 'log', id: uid(), event: ev, ts: ts, who: get('name', ''), prev: state.last };
     state.queue.push(op);
     set('queue', state.queue);
     staleWeeks();
-    setLast({ event: ev, ts: op.ts, who: op.who });
+    setLast({ id: op.id, event: ev, ts: op.ts, who: op.who });
     state.offset = 0;
     state.customTs = null;
     render();
@@ -707,16 +713,44 @@
     flush();
   }
 
+  // What "Undo" would remove next: entries from this phone that haven't been confirmed yet (newest first),
+  // then the server's list of the most recent entries by anyone. Entries already being undone are skipped.
+  function undoStack() {
+    var gone = {};
+    state.queue.forEach(function (q) { if (q.type === 'undo') gone[q.id] = true; });
+    var local = state.queue.filter(function (q) { return q.type === 'log' && !gone[q.id]; }).reverse()
+      .map(function (q) { return { id: q.id, event: q.event, ts: q.ts, who: q.who, prev: q.prev || null, local: true }; });
+    var seen = {};
+    local.forEach(function (l) { seen[l.id] = true; });
+    var server = (state.recent || []).filter(function (e) { return !gone[e.id] && !seen[e.id]; });
+    return local.concat(server);
+  }
+  function entryLabel(e) {
+    return (LABELS[e.event] || e.event) + ' · ' + (e.who || 'someone') + ' · ' + fmtTime(e.ts);
+  }
+
+  var UNDO_GUARD_MS = 700;
+  var lastUndoAt = 0;
+  var undoNoteTimer = null;
   function undo() {
-    var m = state.mine.pop();
-    if (!m) return;
-    set('mine', state.mine);
-    var i = state.queue.findIndex(function (q) { return q.type === 'log' && q.id === m.id; });
-    if (i >= 0) state.queue.splice(i, 1); // never sent, just drop it
-    else state.queue.push({ type: 'undo', id: m.id });
+    var nowMs = Date.now();
+    if (nowMs - lastUndoAt < UNDO_GUARD_MS) return; // a second press right away would remove a different entry
+    var top = undoStack()[0];
+    if (!top) return;
+    lastUndoAt = nowMs;
+    var i = state.queue.findIndex(function (q) { return q.type === 'log' && q.id === top.id; });
+    var beingSent = i === 0 && state.flushing;
+    if (top.local && i >= 0 && !beingSent) state.queue.splice(i, 1); // never sent: just drop it
+    else state.queue.push({ type: 'undo', id: top.id });             // sent, or being sent right now: ask the server
     set('queue', state.queue);
     staleWeeks();
-    setLast(m.prev);
+    state.undoNote = 'Undid ' + (LABELS[top.event] || top.event) + ' · ' + (top.who || 'someone');
+    clearTimeout(undoNoteTimer);
+    undoNoteTimer = setTimeout(function () { state.undoNote = ''; render(); }, 2500);
+    // the banner only changes if it was showing this very entry
+    if (state.last && state.last.id === top.id) setLast(top.prev || null);
+    else render();
+    if (navigator.vibrate) navigator.vibrate(15);
     flush();
   }
 

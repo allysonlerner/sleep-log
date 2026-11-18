@@ -40,8 +40,12 @@
   .ev:active { transform: scale(.98); filter: brightness(1); }
   .ev.flash { filter: brightness(1.15); }
   #foot { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; }
-  #undo { flex: 1; border: 1px solid #3a3f48; background: transparent; color: var(--fg); border-radius: 12px;
-    padding: 14px; font-size: 17px; }
+  #undo { flex: 1; min-width: 0; border: 1px solid #3a3f48; background: transparent; color: var(--fg); border-radius: 12px;
+    padding: 8px 12px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  #undo .u1 { font-size: 17px; }
+  #undo .u2 { font-size: 12px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; min-height: 15px; }
+  #undo.done .u2 { color: #B6D7A8; }
   #undo:disabled { opacity: .35; }
   #gear { border: 1px solid #3a3f48; background: transparent; color: var(--fg); border-radius: 12px;
     padding: 14px 16px; font-size: 17px; }
@@ -154,7 +158,7 @@
   </main>
 
   <footer id="foot">
-    <button id="undo" disabled>Undo last</button>
+    <button id="undo" type="button" disabled><span class="u1">Undo last</span><span class="u2" id="undoNote"></span></button>
     <span id="sync"></span>
     <button id="gear" aria-label="Settings">⚙︎</button>
   </footer>
